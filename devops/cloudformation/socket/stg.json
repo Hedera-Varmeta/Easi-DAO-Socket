@@ -1,0 +1,55 @@
+[
+    {
+        "ParameterKey": "EnvironmentName",
+        "ParameterValue": "stg"
+    },
+    {
+        "ParameterKey": "ProjectName",
+        "ParameterValue": "nft"
+    },
+    {
+        "ParameterKey": "TaskImageUrl",
+        "ParameterValue": "370927314021.dkr.ecr.ap-southeast-1.amazonaws.com/stg-nft-socket"
+    },
+    {
+        "ParameterKey": "Tag",
+        "ParameterValue": "tag_changeme"
+    },   
+    {
+        "ParameterKey": "DesiredCount",
+        "ParameterValue": "1"
+    },
+    {
+        "ParameterKey": "MinContainers",
+        "ParameterValue": "1"
+    },
+    {
+        "ParameterKey": "MaxContainers",
+        "ParameterValue": "1"
+    },
+    {
+        "ParameterKey": "ContainerPort",
+        "ParameterValue": "4000"
+    },
+    {
+        "ParameterKey": "ContainerName",
+        "ParameterValue": "socket"
+    },
+    {
+        "ParameterKey": "AutoScalingTargetValue",
+        "ParameterValue": "50"
+    },
+    {
+        "ParameterKey": "TaskCPU",
+        "ParameterValue": "512"
+    }
+    ,
+    {
+        "ParameterKey": "TaskRAM",
+        "ParameterValue": "1GB"
+    },
+    {
+        "ParameterKey": "ServiceDiscoveryName",
+        "ParameterValue": "socket"
+    }                
+]

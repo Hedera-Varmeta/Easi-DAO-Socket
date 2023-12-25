@@ -1,0 +1,195 @@
+Description: |
+  SOCKET NFT on ECS cluster
+Parameters:
+  ProjectName:
+    Description: The name of the project (git repo).
+    Type: String
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [stg,prod]
+
+  TaskCPU:
+    Description: The number of cpu units used by the task
+    Type: String
+
+  TaskRAM:
+    Description: The amount (in MiB) of memory used by the task.
+    Type: String
+
+  DesiredCount:
+    Description: How many task run on service
+    Type: Number
+
+  ContainerPort:
+    Description: Port of conatiner
+    Type: Number
+
+  ContainerName:
+    Description: Name of container
+    Type: String
+
+  Tag:
+    Description: tag of image repo
+    Type: String
+
+  TaskImageUrl:
+    Description: URL of ECR repo
+    Type: String
+
+  MinContainers:
+    Description: for autoscaling
+    Type: Number
+
+  MaxContainers:
+    Description: for autoscaling
+    Type: Number
+
+  AutoScalingTargetValue:
+    Description: target CPU utilization (%)
+    Type: Number
+
+  ServiceDiscoveryName:
+    Description: Service Discovery Name of service
+    Type: String
+
+Conditions:
+  IsProd: !Equals [ !Ref EnvironmentName, prod ]
+
+Resources:
+
+  SOCKETSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for SOCKET Containers
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-${ProjectName}-vpcID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub "${EnvironmentName}-${ProjectName}-sg-lb-id"
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub "${EnvironmentName}-${ProjectName}-sg-default-ecs-id"
+
+  SOCKETLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', [/ecs/,!Ref EnvironmentName,'-',!Ref ProjectName,'-SOCKET']]    
+      RetentionInDays: 7
+
+  SOCKETTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    # Makes sure the log group is created before it is used.
+    DependsOn:
+      - SOCKETLogGroup
+    Properties:
+      # Name of the task definition. 
+      Family: !Join ['', [!Ref EnvironmentName,'-',!Ref ProjectName,'-SOCKET']]    
+      # awsvpc is required for Fargate
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref TaskCPU
+      Memory: !Ref TaskRAM
+      ExecutionRoleArn:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-${ProjectName}-ExecutionRole"
+      TaskRoleArn:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-${ProjectName}-TaskRole"  
+      ContainerDefinitions:
+        - Name: !Ref ContainerName
+          Image: !Sub "${TaskImageUrl}:${Tag}"
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref SOCKETLogGroup
+              awslogs-stream-prefix: ecs
+
+  SOCKETService:
+    Type: AWS::ECS::Service
+    Properties: 
+      ServiceName: !Join ['', [!Ref EnvironmentName,'-',!Ref ProjectName,'-SOCKET']]   
+      Cluster:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-${ProjectName}-ECSCluster"
+      TaskDefinition: !Ref SOCKETTaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration: 
+        AwsvpcConfiguration:
+          # change to DISABLED if you're using private subnets that have access to a NAT gateway
+          AssignPublicIp: ENABLED
+          Subnets:
+            - Fn::ImportValue: !Sub "${EnvironmentName}-${ProjectName}-ID-pub1"
+            - Fn::ImportValue: !Sub "${EnvironmentName}-${ProjectName}-ID-pub2"
+            - Fn::ImportValue: !Sub "${EnvironmentName}-${ProjectName}-ID-pub3"
+          SecurityGroups:
+            - !Ref SOCKETSecurityGroup
+            - Fn::ImportValue: !Sub "${EnvironmentName}-${ProjectName}-sg-default-ecs-id"
+      LoadBalancers:
+        - TargetGroupArn:
+            Fn::ImportValue:
+              !Sub "${EnvironmentName}-${ProjectName}-TargetGroupSOCKETArn"
+          ContainerPort: !Ref ContainerPort
+          ContainerName: !Ref ContainerName
+      ServiceRegistries :
+        - RegistryArn: !GetAtt SOCKETServiceDiscovery.Arn
+      PlatformVersion: 1.4.0
+
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: !Ref MinContainers
+      MaxCapacity: !Ref MaxContainers
+      ResourceId: !Join ['/', [service, Fn::ImportValue: !Sub "${EnvironmentName}-${ProjectName}-ECSCluster", !GetAtt SOCKETService.Name]]
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      # "The Amazon Resource Name (ARN) of an AWS Identity and Access Management (IAM) role that allows Application Auto Scaling to modify your scalable target."
+      RoleARN:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-${ProjectName}-AutoScalingRoleArn"
+
+  AutoScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "${EnvironmentName}-${ProjectName}-AutoScalingPolicy-for-SOCKET"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 20
+        ScaleOutCooldown: 20
+        # Keep things at or lower than 50% CPU utilization, for example
+        TargetValue: !Ref AutoScalingTargetValue
+
+## Service discovery ###
+
+  SOCKETServiceDiscovery:
+    Type: 'AWS::ServiceDiscovery::Service'
+    Properties:
+      Description: Service based on a private DNS namespace
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: 10
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 2
+      Name: !Ref ServiceDiscoveryName
+      NamespaceId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-${ProjectName}-ServiceDiscoveryNameSpaceId"

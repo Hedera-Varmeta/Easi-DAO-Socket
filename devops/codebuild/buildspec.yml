@@ -1,0 +1,41 @@
+version: 0.2
+
+phases:
+  pre_build:
+    on-failure: ABORT
+    commands:
+      - echo "checking version dependencies ..."
+      - apt install jq -y
+      - export REGISTRY_URL=${REGISTRY_URL}
+      - export UNIQ_TIME=`date +%Y%d%m%H%M`
+      - export LASTEST_COMMIT_ID=${CODEBUILD_RESOLVED_SOURCE_VERSION}
+      - export ENV_PROJECT=${ENV_PROJECT}
+      - export STACK_NAME=${STACK_NAME}    
+  build:
+    on-failure: ABORT
+    commands:
+      - echo build started on `date`
+      - aws ssm get-parameter --with-decryption --name /${ENV_PROJECT}/socket/env --region ap-southeast-1 | jq '.Parameter.Value'| sed 's/^"\(.*\)/\1/' |sed 's/.$//' | sed 's/\\n/\n/g' > .env
+      - aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 370927314021.dkr.ecr.ap-southeast-1.amazonaws.com
+      - docker build -f devops/Dockerfile -t ${ENV_PROJECT}-nft-socket .
+      - echo ${LASTEST_COMMIT_ID}-${UNIQ_TIME}
+      - docker tag ${ENV_PROJECT}-nft-socket:latest ${REGISTRY_URL}:${LASTEST_COMMIT_ID}-${UNIQ_TIME}
+      - docker push ${REGISTRY_URL}:${LASTEST_COMMIT_ID}-${UNIQ_TIME}
+
+  post_build:
+    commands:
+      - echo build completed on `date` 
+      - echo Now Codebuild will update new image to ECS service 
+      - echo Updating Tag ... 
+      - sed -i -e "s+tag_changeme+${LASTEST_COMMIT_ID}-${UNIQ_TIME}+g" devops/cloudformation/socket/${ENV_PROJECT}.json
+      - echo Updating Cloudformation Stack ... 
+      - cd devops/cloudformation/socket
+      - |
+        status=`aws cloudformation describe-stacks --stack-name ${STACK_NAME} | jq '.Stacks[0].StackStatus'|sed 's/^"\(.*\)/\1/' |sed 's/.$//' | sed 's/\\n/\n/g'`
+        if [ -z $status ]; then
+            echo "Stack not exists, Creating new !!!"
+            aws cloudformation create-stack --stack-name=${STACK_NAME} --template-body file://template.yaml --parameters file://${ENV_PROJECT}.json --capabilities CAPABILITY_NAMED_IAM
+        else
+            echo "Stack is existing, Updating stack !!!"
+            aws cloudformation update-stack --stack-name=${STACK_NAME} --template-body file://template.yaml --parameters file://${ENV_PROJECT}.json --capabilities CAPABILITY_NAMED_IAM 
+        fi
